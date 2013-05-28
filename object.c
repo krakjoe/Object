@@ -41,12 +41,6 @@ ZEND_BEGIN_ARG_INFO_EX(Object_is, 0, 0, 2)
     ZEND_ARG_INFO(0, with)
 ZEND_END_ARG_INFO()
 
-static inline void object_globals_ctor(zend_object_globals *og TSRMLS_CC){}
-static inline void object_globals_dtor(zend_object_globals *og TSRMLS_CC){}
-
-static zend_bool zend_boolean_true = 1;
-static zend_bool zend_boolean_false = 0;
-
 /* {{{ object_functions[]
  *
  */
@@ -81,6 +75,8 @@ zend_module_entry object_module_entry = {
 ZEND_GET_MODULE(object)
 #endif
 
+static inline object_globals_ctor(zend_object_globals *zog){}
+
 /* {{{ PHP_MINIT_FUNCTION
  */
 PHP_MINIT_FUNCTION(object)
@@ -92,11 +88,7 @@ PHP_MINIT_FUNCTION(object)
     object_class_entry = zend_register_internal_class(
         &oe TSRMLS_CC);
 
-#ifdef ZTS
-    ZEND_INIT_MODULE_GLOBALS(object, object_globals_ctor, object_globals_dtor);
-#else
-    object_globals_ctor(&object_globals);    
-#endif
+    ZEND_INIT_MODULE_GLOBALS(object, object_globals_ctor, NULL);
 
 	return SUCCESS;
 }
@@ -106,10 +98,6 @@ PHP_MINIT_FUNCTION(object)
  */
 PHP_MSHUTDOWN_FUNCTION(object)
 {
-#ifndef ZTS
-    object_globals_dtor(&object_globals);
-#endif
-
 	return SUCCESS;
 }
 /* }}} */
@@ -118,12 +106,16 @@ static inline void object_changed_dtor(void *changes) {
     zend_hash_destroy((HashTable*) changes);
 }
 
+static inline void object_classed_dtor(void *changed) {
+    efree(*(zend_class_entry**)changed);
+}
+
 static inline HashTable* zend_object_inheritance(zend_object *zobject TSRMLS_DC) {
     HashTable inherit, *inheritance = NULL;
     
     if (zend_hash_index_find(&OBJECT_G(changed), (ulong) zobject, (void**) &inheritance) != SUCCESS) {
         zend_hash_init(
-            &inherit, 8, NULL, NULL, 0);
+            &inherit, 8, NULL, object_classed_dtor, 0);
         zend_hash_index_update(
             &OBJECT_G(changed), (ulong) zobject, (void**) &inherit, sizeof(HashTable), (void**) &inheritance);
     }
@@ -137,19 +129,21 @@ static inline zend_bool zend_object_implements(zend_object *zobject, zend_class_
 }
 
 static inline void zend_object_extend(zend_object *zobject, zend_class_entry *entry TSRMLS_DC) {
-    zend_class_entry zecopy = *zobject->ce, *pzecopy = NULL;
+    zend_class_entry *zecopy = emalloc(sizeof(zend_class_entry));
 	    
-    {
+    {   
+        *zecopy = *entry;
+        
         zend_do_inheritance(
-            &zecopy, entry TSRMLS_CC
+            zecopy, entry TSRMLS_CC
         );
         
         zend_hash_index_update(
             zend_object_inheritance(zobject TSRMLS_CC), (ulong) entry,
-            (void**) &zecopy, sizeof(zend_class_entry), (void**) &pzecopy
+            (void**) &zecopy, sizeof(zend_class_entry), NULL
         );
         
-        zobject->ce = pzecopy;
+        zobject->ce = zecopy;
     }
 }
 
